@@ -1,0 +1,22 @@
+# Node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# dotenv
+.env
+.env.local
+.env.*.local
+.env.keys
+
+# macOS
+.DS_Store
+
+# Build output (por si se agrega más adelante)
+dist/
+build/
+
+# Supabase local
+.supabase/
