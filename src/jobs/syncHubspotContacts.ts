@@ -1,8 +1,5 @@
 import "dotenv/config";
-import {
-  searchHubspotContactsUpdatedSince,
-  type HubSpotContact,
-} from "../connectors/hubspot";
+import { listContacts, type HubSpotContact } from "../connectors/hubspot";
 import { getSupabaseClient } from "../lib/supabase";
 
 type SyncResult = {
@@ -10,36 +7,34 @@ type SyncResult = {
   upserted: number;
 };
 
-const CONTACT_PROPERTIES = [
-  "utm_source",
-  "utm_medium",
-  "utm_campaign",
-  "utm_content",
-  "utm_term",
-  "lifecycle_stage",
-  "lead_status",
-  "hubspot_owner_id",
-];
-
 async function syncHubspotContacts(): Promise<SyncResult> {
   const supabase = getSupabaseClient();
 
-  let after: string | undefined;
+  let after: string | undefined = process.env.HUBSPOT_AFTER || undefined;
   let fetched = 0;
   let upserted = 0;
   const updatedSinceMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
 
   for (;;) {
-    const page = await searchHubspotContactsUpdatedSince({
-      updatedSinceMs,
-      limit: 100,
-      properties: CONTACT_PROPERTIES,
-      ...(after ? { after } : {}),
-    });
-    fetched += page.results.length;
+    const page = await listContacts(after ? { after } : undefined);
+    const pageSize = page.results.length;
+    fetched += pageSize;
+    // eslint-disable-next-line no-console
+    console.log(
+      JSON.stringify(
+        { job: "syncHubspotContacts", pageSize, after: after ?? null },
+        null,
+        2,
+      ),
+    );
 
-    if (page.results.length > 0) {
-      const rows = page.results.map((c: HubSpotContact) => ({
+    const recent = page.results.filter((c: HubSpotContact) => {
+      const updatedAtMs = Date.parse(c.updatedAt);
+      return Number.isFinite(updatedAtMs) && updatedAtMs >= updatedSinceMs;
+    });
+
+    if (recent.length > 0) {
+      const rows = recent.map((c: HubSpotContact) => ({
         hubspot_contact_id: c.id,
         created_at: c.createdAt,
         updated_at: c.updatedAt,
@@ -48,8 +43,8 @@ async function syncHubspotContacts(): Promise<SyncResult> {
         utm_campaign: c.properties.utm_campaign ?? null,
         utm_content: c.properties.utm_content ?? null,
         utm_term: c.properties.utm_term ?? null,
-        lifecycle_stage: c.properties.lifecycle_stage ?? null,
-        lead_status: c.properties.lead_status ?? null,
+        lifecycle_stage: c.properties.lifecyclestage ?? null,
+        lead_status: c.properties.hs_lead_status ?? null,
         hubspot_owner_id: c.properties.hubspot_owner_id ?? null,
       }));
 
@@ -60,9 +55,21 @@ async function syncHubspotContacts(): Promise<SyncResult> {
 
       if (error) throw error;
       upserted += data?.length ?? 0;
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          {
+            job: "syncHubspotContacts",
+            insertedThisPage: data?.length ?? 0,
+            totalInserted: upserted,
+          },
+          null,
+          2,
+        ),
+      );
     }
 
-    after = page.paging?.next?.after;
+    after = page.nextAfter;
     if (!after) break;
   }
 
@@ -77,6 +84,17 @@ async function main() {
 
 main().catch((err) => {
   // eslint-disable-next-line no-console
+  console.error(
+    JSON.stringify(
+      {
+        job: "syncHubspotContacts",
+        error: err instanceof Error ? err.message : String(err),
+        hint: "Puedes reanudar con HUBSPOT_AFTER=<after> pnpm run sync:hubspot",
+      },
+      null,
+      2,
+    ),
+  );
   console.error(err);
   process.exitCode = 1;
 });
