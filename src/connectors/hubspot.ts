@@ -9,6 +9,7 @@ function sleep(ms: number) {
 }
 
 const DEFAULT_CONTACT_PROPERTIES = [
+  "hs_object_id",
   "email",
   "phone",
   "utm_source",
@@ -19,6 +20,8 @@ const DEFAULT_CONTACT_PROPERTIES = [
   "hubspot_owner_id",
   "lifecyclestage",
   "hs_lead_status",
+  "mql",
+  "disqualified",
   "createdate",
   "lastmodifieddate",
 ];
@@ -148,5 +151,53 @@ export async function listContacts(params?: { after?: string }) {
     results: data.results,
     nextAfter: data.paging?.next?.after,
   };
+}
+
+export type HubSpotSearchMode = "createdate" | "lastmodifieddate";
+
+export async function searchContacts(params: {
+  mode: HubSpotSearchMode;
+  sinceMs: number;
+  untilMs?: number;
+  after?: string;
+}) {
+  const filterProp = params.mode === "createdate" ? "createdate" : "lastmodifieddate";
+
+  const filters: Array<{
+    propertyName: string;
+    operator: "GTE" | "LT";
+    value: string;
+  }> = [
+    {
+      propertyName: filterProp,
+      operator: "GTE",
+      value: String(params.sinceMs),
+    },
+  ];
+
+  if (params.untilMs !== undefined) {
+    filters.push({
+      propertyName: filterProp,
+      operator: "LT",
+      value: String(params.untilMs),
+    });
+  }
+
+  const data = await hubspotRequest<{
+    results: HubSpotContact[];
+    paging?: { next?: { after: string } };
+  }>("/crm/v3/objects/contacts/search", {
+    method: "POST",
+    body: {
+      filterGroups: [{ filters }],
+      sorts: [filterProp],
+      properties: DEFAULT_CONTACT_PROPERTIES,
+      limit: 100,
+      archived: false,
+      ...(params.after ? { after: params.after } : {}),
+    },
+  });
+
+  return { results: data.results, nextAfter: data.paging?.next?.after };
 }
 
