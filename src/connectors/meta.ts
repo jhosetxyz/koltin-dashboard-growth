@@ -8,6 +8,19 @@ type MetaInsightsRow = {
   ctr: string;
 };
 
+type MetaAdsetInsightsRow = {
+  campaign_id: string;
+  campaign_name: string;
+  adset_id: string;
+  adset_name: string;
+  date_start: string;
+  spend: string;
+  impressions: string;
+  clicks: string;
+  ctr: string;
+  account_currency?: string;
+};
+
 type MetaResponse<T> = {
   data: T[];
   paging?: { next?: string };
@@ -138,6 +151,52 @@ export async function fetchMetaCampaignInsightsDaily(params: {
     if (json && typeof json === "object" && "error" in (json as object) && (json as MetaResponse<MetaInsightsRow>).error) {
       // eslint-disable-next-line no-console
       console.error("Meta API returned error payload:", JSON.stringify((json as MetaResponse<MetaInsightsRow>).error, null, 2));
+      throw new Error("Meta API returned error payload");
+    }
+
+    rows.push(...(json.data ?? []));
+    nextUrl = json.paging?.next ?? "";
+  }
+
+  return rows;
+}
+
+export async function fetchMetaAdsetInsightsDaily(params: {
+  since: string;
+  until: string;
+}): Promise<MetaAdsetInsightsRow[]> {
+  const accessToken = requiredEnv("META_ACCESS_TOKEN");
+  const adAccountId = requiredEnv("META_AD_ACCOUNT_ID");
+
+  let nextUrl =
+    `${baseUrl}/${encodeURIComponent(adAccountId)}/insights` +
+    toQueryString({
+      level: "adset",
+      time_increment: 1,
+      "time_range[since]": params.since,
+      "time_range[until]": params.until,
+      fields:
+        "campaign_id,campaign_name,adset_id,adset_name,date_start,spend,impressions,clicks,ctr,account_currency",
+      limit: 500,
+      access_token: accessToken,
+    });
+
+  const rows: MetaAdsetInsightsRow[] = [];
+
+  while (nextUrl) {
+    const json = await metaFetchJson<MetaResponse<MetaAdsetInsightsRow>>(nextUrl);
+
+    if (
+      json &&
+      typeof json === "object" &&
+      "error" in (json as object) &&
+      (json as MetaResponse<MetaAdsetInsightsRow>).error
+    ) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "Meta API returned error payload:",
+        JSON.stringify((json as MetaResponse<MetaAdsetInsightsRow>).error, null, 2),
+      );
       throw new Error("Meta API returned error payload");
     }
 

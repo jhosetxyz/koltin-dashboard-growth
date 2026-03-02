@@ -23,6 +23,7 @@ type WeeklyRow = {
   platform: string | null;
   utm_campaign: string | null;
   canonical_campaign?: string | null;
+  canonical_subgroup?: string | null;
   spend: string | number | null;
   impressions: number | null;
   clicks: number | null;
@@ -121,8 +122,10 @@ async function aggregateWeeklyQualityByCampaign() {
   if (rows.length > 0) {
     const { data: upsertData, error: upsertError } = await supabase
       .from("weekly_quality_by_campaign")
-      .upsert(rows, { onConflict: "week_start,utm_campaign,platform" })
-      .select("week_start,utm_campaign,platform");
+      .upsert(rows, {
+        onConflict: "week_start,platform,canonical_campaign,canonical_subgroup",
+      })
+      .select("week_start,platform,canonical_campaign,canonical_subgroup");
 
     if (upsertError) throw upsertError;
     upserted = upsertData?.length ?? 0;
