@@ -11,6 +11,8 @@
     "aggregate:weekly": "ts-node-dev --transpile-only src/jobs/aggregateWeeklyQualityByCampaign.ts",
     "sync:meta": "ts-node-dev --transpile-only src/jobs/syncMetaSpendDaily.ts",
     "sync:meta_utms": "ts-node-dev --transpile-only src/jobs/syncMetaUtmsDaily.ts",
+    "sync:google_spend": "ts-node-dev --transpile-only src/jobs/syncGoogleSpendDaily.ts",
+    "seed:google_campaign_mapping": "ts-node-dev --transpile-only src/jobs/seedGoogleCampaignMapping.ts",
     "governance:utms": "ts-node-dev --transpile-only src/jobs/computeUtmGovernanceWeekly.ts"
   },
   "keywords": [],
@@ -20,7 +22,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.97.0",
     "dotenv": "^17.3.1",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "google-ads-api": "^23.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
