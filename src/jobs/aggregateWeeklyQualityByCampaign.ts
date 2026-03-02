@@ -22,6 +22,7 @@ type WeeklyRow = {
   week_end: string | null;
   platform: string | null;
   utm_campaign: string | null;
+  canonical_campaign?: string | null;
   spend: string | number | null;
   impressions: number | null;
   clicks: number | null;
@@ -37,6 +38,14 @@ type WeeklyRow = {
   quality_ratio: string | number | null;
   quality_index: string | number | null;
   generated_at: string | null;
+};
+
+type UnmappedWeeklyRow = {
+  week_start: string;
+  raw_utm: string;
+  leads: number;
+  spend: string | number;
+  inserted_at?: string | null;
 };
 
 async function aggregateWeeklyQualityByCampaign() {
@@ -67,6 +76,47 @@ async function aggregateWeeklyQualityByCampaign() {
   const rows = (data ?? []) as WeeklyRow[];
   const uniqueWeeks = Array.from(new Set(rows.map((r) => r.week_start))).sort();
 
+  const { data: unmappedCountData, error: unmappedCountError } =
+    await supabase.rpc("count_unmapped_utms", {
+      since_date: sinceDate,
+      until_date: untilDate,
+    });
+  if (unmappedCountError) throw unmappedCountError;
+  const unmappedDistinct = Number(unmappedCountData ?? 0);
+
+  const { data: topUnmappedData, error: topUnmappedError } = await supabase.rpc(
+    "top_unmapped_utms",
+    { since_date: sinceDate, until_date: untilDate, limit_n: 20 },
+  );
+  if (topUnmappedError) throw topUnmappedError;
+
+  const { data: unmappedWeeklyData, error: unmappedWeeklyError } =
+    await supabase.rpc("compute_utm_unmapped_weekly", {
+      since_date: sinceDate,
+      until_date: untilDate,
+      limit_per_week: 50,
+    });
+  if (unmappedWeeklyError) throw unmappedWeeklyError;
+
+  const unmappedWeeklyRows = (unmappedWeeklyData ?? []) as UnmappedWeeklyRow[];
+
+  let unmappedUpserted = 0;
+  if (unmappedWeeklyRows.length > 0) {
+    const { data: unmappedUpsertData, error: unmappedUpsertError } = await supabase
+      .from("utm_unmapped_weekly")
+      .upsert(unmappedWeeklyRows, { onConflict: "week_start,raw_utm" })
+      .select("week_start,raw_utm");
+    if (unmappedUpsertError) throw unmappedUpsertError;
+    unmappedUpserted = unmappedUpsertData?.length ?? 0;
+  }
+
+  const top10UnmappedByLeads = [...unmappedWeeklyRows]
+    .sort((a, b) => (b.leads ?? 0) - (a.leads ?? 0))
+    .slice(0, 10);
+  const top10UnmappedBySpend = [...unmappedWeeklyRows]
+    .sort((a, b) => Number(b.spend ?? 0) - Number(a.spend ?? 0))
+    .slice(0, 10);
+
   let upserted = 0;
   if (rows.length > 0) {
     const { data: upsertData, error: upsertError } = await supabase
@@ -88,6 +138,12 @@ async function aggregateWeeklyQualityByCampaign() {
         weeksProcessed: uniqueWeeks.length,
         rowsComputed: rows.length,
         rowsUpserted: upserted,
+        unmappedDistinct,
+        topUnmapped: topUnmappedData ?? [],
+        unmappedWeeklyRowsComputed: unmappedWeeklyRows.length,
+        unmappedWeeklyRowsUpserted: unmappedUpserted,
+        top10UnmappedByLeads,
+        top10UnmappedBySpend,
       },
       null,
       2,

@@ -11,6 +11,19 @@ type SyncResult = {
   upserted: number;
 };
 
+export type RunSyncHubspotContactsParams = {
+  mode: HubSpotSearchMode;
+  since: string; // YYYY-MM-DD (UTC)
+  until?: string; // YYYY-MM-DD (UTC), end-exclusive
+  after?: string;
+  logPages?: boolean;
+};
+
+export type RunSyncHubspotContactsResult = SyncResult & {
+  minCreatedAt: string | null;
+  maxCreatedAt: string | null;
+};
+
 function parseArgValue(name: string): string | undefined {
   const prefix = `--${name}=`;
   const hit = process.argv.find((a) => a.startsWith(prefix));
@@ -51,12 +64,6 @@ function parseBool(v: string | null | undefined): boolean | null {
 }
 
 async function syncHubspotContacts(): Promise<SyncResult> {
-  const supabase = getSupabaseClient();
-
-  let after: string | undefined = process.env.HUBSPOT_AFTER || undefined;
-  let fetched = 0;
-  let upserted = 0;
-
   const mode = (parseArgValue("mode") ??
     process.env.HUBSPOT_MODE ??
     "lastmodifieddate") as HubSpotSearchMode;
@@ -64,18 +71,42 @@ async function syncHubspotContacts(): Promise<SyncResult> {
   const sinceStr = parseArgValue("since") ?? process.env.HUBSPOT_SINCE;
   const untilStr = parseArgValue("until") ?? process.env.HUBSPOT_UNTIL;
 
-  const sinceMs = sinceStr
-    ? parseUtcDateStartMs(sinceStr)
-    : Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const untilMs = untilStr ? parseUtcDateStartMs(untilStr) : undefined;
+  const since =
+    sinceStr ??
+    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  return await runSyncHubspotContacts({
+    mode,
+    since,
+    ...(untilStr ? { until: untilStr } : {}),
+    ...(process.env.HUBSPOT_AFTER ? { after: process.env.HUBSPOT_AFTER } : {}),
+    logPages: true,
+  });
+}
+
+export async function runSyncHubspotContacts(
+  params: RunSyncHubspotContactsParams,
+): Promise<RunSyncHubspotContactsResult> {
+  const supabase = getSupabaseClient();
+
+  let after: string | undefined = params.after;
+  let fetched = 0;
+  let upserted = 0;
+
+  const sinceMs = parseUtcDateStartMs(params.since);
+  const untilMs = params.until ? parseUtcDateStartMs(params.until) : undefined;
+
+  let minCreatedAtMs: number | null = null;
+  let maxCreatedAtMs: number | null = null;
 
   for (;;) {
     const page = await searchContacts({
-      mode,
+      mode: params.mode,
       sinceMs,
       ...(untilMs !== undefined ? { untilMs } : {}),
       ...(after ? { after } : {}),
     });
+
     const pageSize = page.results.length;
     fetched += pageSize;
 
@@ -94,26 +125,41 @@ async function syncHubspotContacts(): Promise<SyncResult> {
     createdates.sort((a, b) => a - b);
     lastmods.sort((a, b) => a - b);
 
-    // eslint-disable-next-line no-console
-    console.log(
-      JSON.stringify(
-        {
-          job: "syncHubspotContacts",
-          mode,
-          sinceMs,
-          untilMs: untilMs ?? null,
-          pageSize,
-          after: after ?? null,
-          nextAfter: page.nextAfter ?? null,
-          minCreatedate: createdates[0] ?? null,
-          maxCreatedate: createdates.at(-1) ?? null,
-          minLastmodifieddate: lastmods[0] ?? null,
-          maxLastmodifieddate: lastmods.at(-1) ?? null,
-        },
-        null,
-        2,
-      ),
-    );
+    if (createdates.length > 0) {
+      const minCd = createdates[0]!;
+      const maxCd = createdates[createdates.length - 1]!;
+      minCreatedAtMs =
+        minCreatedAtMs === null
+          ? minCd
+          : Math.min(minCreatedAtMs, minCd);
+      maxCreatedAtMs =
+        maxCreatedAtMs === null
+          ? maxCd
+          : Math.max(maxCreatedAtMs, maxCd);
+    }
+
+    if (params.logPages) {
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          {
+            job: "syncHubspotContacts",
+            mode: params.mode,
+            sinceMs,
+            untilMs: untilMs ?? null,
+            pageSize,
+            after: after ?? null,
+            nextAfter: page.nextAfter ?? null,
+            minCreatedate: createdates[0] ?? null,
+            maxCreatedate: createdates.at(-1) ?? null,
+            minLastmodifieddate: lastmods[0] ?? null,
+            maxLastmodifieddate: lastmods.at(-1) ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }
 
     if (page.results.length > 0) {
       const rows = page.results.map((c: HubSpotContact) => {
@@ -121,10 +167,7 @@ async function syncHubspotContacts(): Promise<SyncResult> {
         let updated_at: string;
 
         try {
-          created_at = toIsoFromHubspotValue(
-            c.properties.createdate,
-            c.createdAt,
-          );
+          created_at = toIsoFromHubspotValue(c.properties.createdate, c.createdAt);
         } catch {
           // eslint-disable-next-line no-console
           console.warn(`Missing createdate for contact ${c.id}; using now()`);
@@ -179,25 +222,35 @@ async function syncHubspotContacts(): Promise<SyncResult> {
 
       if (error) throw error;
       upserted += data?.length ?? 0;
-      // eslint-disable-next-line no-console
-      console.log(
-        JSON.stringify(
-          {
-            job: "syncHubspotContacts",
-            insertedThisPage: data?.length ?? 0,
-            totalInserted: upserted,
-          },
-          null,
-          2,
-        ),
-      );
+
+      if (params.logPages) {
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify(
+            {
+              job: "syncHubspotContacts",
+              insertedThisPage: data?.length ?? 0,
+              totalInserted: upserted,
+            },
+            null,
+            2,
+          ),
+        );
+      }
     }
 
     after = page.nextAfter;
     if (!after) break;
   }
 
-  return { fetched, upserted };
+  return {
+    fetched,
+    upserted,
+    minCreatedAt:
+      minCreatedAtMs === null ? null : new Date(minCreatedAtMs).toISOString(),
+    maxCreatedAt:
+      maxCreatedAtMs === null ? null : new Date(maxCreatedAtMs).toISOString(),
+  };
 }
 
 async function main() {
@@ -206,20 +259,22 @@ async function main() {
   console.log(JSON.stringify({ job: "syncHubspotContacts", ...result }, null, 2));
 }
 
-main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error(
-    JSON.stringify(
-      {
-        job: "syncHubspotContacts",
-        error: err instanceof Error ? err.message : String(err),
-        hint: "Puedes reanudar con HUBSPOT_AFTER=<after> pnpm run sync:hubspot",
-      },
-      null,
-      2,
-    ),
-  );
-  console.error(err);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error(
+      JSON.stringify(
+        {
+          job: "syncHubspotContacts",
+          error: err instanceof Error ? err.message : String(err),
+          hint: "Puedes reanudar con HUBSPOT_AFTER=<after> pnpm run sync:hubspot",
+        },
+        null,
+        2,
+      ),
+    );
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
 

@@ -89,6 +89,12 @@ async function metaFetchJson<T>(url: string): Promise<T> {
     } catch (err) {
       clearTimeout(timeout);
 
+      if (
+        err instanceof Error &&
+        (err.message.includes("(400") || err.message.includes("400 Bad Request"))
+      ) {
+        throw err;
+      }
       if (attempt >= maxRetries) throw err;
       // eslint-disable-next-line no-console
       console.warn(
@@ -132,6 +138,72 @@ export async function fetchMetaCampaignInsightsDaily(params: {
     if (json && typeof json === "object" && "error" in (json as object) && (json as MetaResponse<MetaInsightsRow>).error) {
       // eslint-disable-next-line no-console
       console.error("Meta API returned error payload:", JSON.stringify((json as MetaResponse<MetaInsightsRow>).error, null, 2));
+      throw new Error("Meta API returned error payload");
+    }
+
+    rows.push(...(json.data ?? []));
+    nextUrl = json.paging?.next ?? "";
+  }
+
+  return rows;
+}
+
+type MetaAdNode = {
+  id: string;
+  name?: string;
+  campaign_id?: string;
+  adset_id?: string;
+  campaign?: { id?: string; name?: string } | null;
+  adset?: { id?: string; name?: string } | null;
+  creative?: {
+    id?: string;
+    name?: string;
+    url_tags?: string | null;
+    object_url?: string | null;
+    object_story_spec?: unknown;
+  } | null;
+  url_tags?: string | null;
+};
+
+export async function fetchMetaActiveAdsWithTracking(): Promise<MetaAdNode[]> {
+  const accessToken = requiredEnv("META_ACCESS_TOKEN");
+  const adAccountId = requiredEnv("META_AD_ACCOUNT_ID");
+
+  const fields = [
+    "id",
+    "name",
+    "campaign_id",
+    "adset_id",
+    "campaign{name}",
+    "adset{name}",
+    "url_tags",
+    "creative{id,name,url_tags,object_url,object_story_spec}",
+  ].join(",");
+
+  let nextUrl =
+    `${baseUrl}/${encodeURIComponent(adAccountId)}/ads` +
+    toQueryString({
+      fields,
+      limit: 500,
+      effective_status: JSON.stringify(["ACTIVE"]),
+      access_token: accessToken,
+    });
+
+  const rows: MetaAdNode[] = [];
+  while (nextUrl) {
+    const json = await metaFetchJson<MetaResponse<MetaAdNode>>(nextUrl);
+
+    if (
+      json &&
+      typeof json === "object" &&
+      "error" in (json as object) &&
+      (json as MetaResponse<MetaAdNode>).error
+    ) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "Meta API returned error payload:",
+        JSON.stringify((json as MetaResponse<MetaAdNode>).error, null, 2),
+      );
       throw new Error("Meta API returned error payload");
     }
 

@@ -28,6 +28,30 @@ type SpendRow = {
   ctr: number;
 };
 
+function aggregateByCampaignDate(rows: SpendRow[]): SpendRow[] {
+  const map = new Map<string, SpendRow>();
+
+  for (const r of rows) {
+    const key = `${r.platform}|${r.date}|${r.campaign_id}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...r });
+      continue;
+    }
+
+    existing.spend += r.spend;
+    existing.impressions += r.impressions;
+    existing.clicks += r.clicks;
+    if (!existing.campaign_name && r.campaign_name) existing.campaign_name = r.campaign_name;
+  }
+
+  for (const v of map.values()) {
+    v.ctr = v.impressions > 0 ? v.clicks / v.impressions : 0;
+  }
+
+  return Array.from(map.values());
+}
+
 async function syncMetaSpendDaily() {
   const supabase = getSupabaseClient();
   const accountId = requiredEnv("META_AD_ACCOUNT_ID");
@@ -41,7 +65,7 @@ async function syncMetaSpendDaily() {
 
   const insights = await fetchMetaCampaignInsightsDaily({ since, until });
 
-  const rows: SpendRow[] = insights.map((r) => ({
+  const rowsRaw: SpendRow[] = insights.map((r) => ({
     platform: "meta",
     account_id: accountId,
     day: r.date_start,
@@ -53,6 +77,8 @@ async function syncMetaSpendDaily() {
     clicks: Number.parseInt(r.clicks, 10) || 0,
     ctr: Number(r.ctr) || 0,
   }));
+
+  const rows = aggregateByCampaignDate(rowsRaw);
 
   const dates = rows
     .map((r) => r.date)
@@ -77,7 +103,8 @@ async function syncMetaSpendDaily() {
     JSON.stringify(
       {
         job: "syncMetaSpendDaily",
-        fetchedRows: rows.length,
+        fetchedRows: rowsRaw.length,
+        rowsAfterAggregation: rows.length,
         upsertedRows: upserted,
         firstDate,
         lastDate,
