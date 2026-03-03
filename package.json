@@ -15,7 +15,8 @@
     "seed:google_campaign_mapping": "ts-node-dev --transpile-only src/jobs/seedGoogleCampaignMapping.ts",
     "sync:fx_usd_mxn": "ts-node-dev --transpile-only src/jobs/syncFxUsdMxnDaily.ts",
     "governance:utms": "ts-node-dev --transpile-only src/jobs/computeUtmGovernanceWeekly.ts",
-    "ops:weekly_close": "ts-node-dev --transpile-only src/jobs/opsWeeklyClose.ts"
+    "ops:weekly_close": "ts-node-dev --transpile-only src/jobs/opsWeeklyClose.ts",
+    "qa:week": "ts-node-dev --transpile-only src/jobs/qaWeek.ts"
   },
   "keywords": [],
   "author": "",
