@@ -171,6 +171,17 @@ async function aggregateWeeklyQualityByCampaign() {
     frozenInserted = frozenData?.length ?? 0;
   }
 
+  const weeksToDecide = uniqueWeeks.filter((w) => w < currentWeekStart);
+  let decisionsUpserted = 0;
+  for (const w of weeksToDecide) {
+    const { data: decisionsData, error: decisionsError } = await supabase.rpc(
+      "compute_weekly_campaign_decisions",
+      { target_week_start: w },
+    );
+    if (decisionsError) throw decisionsError;
+    decisionsUpserted += Number(decisionsData ?? 0);
+  }
+
   // eslint-disable-next-line no-console
   console.log(
     JSON.stringify(
@@ -184,6 +195,8 @@ async function aggregateWeeklyQualityByCampaign() {
         currentWeekStart,
         frozenRowsAttempted: frozenRows.length,
         frozenRowsInserted: frozenInserted,
+        decisionsWeeks: weeksToDecide.length,
+        decisionsRowsUpserted: decisionsUpserted,
         unmappedDistinct,
         topUnmapped: topUnmappedData ?? [],
         unmappedWeeklyRowsComputed: unmappedWeeklyRows.length,
