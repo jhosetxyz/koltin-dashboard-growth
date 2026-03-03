@@ -98,6 +98,60 @@ El job genera dos salidas:
 
 Tip: para el dashboard puedes leer de `public.weekly_quality_by_campaign_effective`, que combina semanas cerradas (frozen) + la semana abierta (live).
 
+#### Autopilot: cierre semanal WOW + Decision Engine
+
+Comando único:
+
+```bash
+pnpm run ops:weekly_close -- --since=2026-02-03 --until=2026-03-03 --dry_run=true
+pnpm run ops:weekly_close -- --since=2026-02-03 --until=2026-03-03
+```
+
+- `--since=YYYY-MM-DD`: **lunes UTC** (incluyente)
+- `--until=YYYY-MM-DD`: end-exclusive
+- `--dry_run=true|false`: default `false` (si es `true`, no inserta ni ejecuta decisiones; solo imprime qué semanas congelaría y cuántas filas)
+
+Definición: **semana cerrada** = `week_start < week_start_de_la_semana_actual` (lunes actual UTC).
+
+Qué hace (en orden):
+- Recalcula weekly live (RPC `compute_weekly_quality_by_campaign`) para el rango.
+- Inserta en `public.weekly_quality_by_campaign_frozen` **solo si la semana no existe aún** (week-level insert-once).
+- Ejecuta `public.compute_weekly_campaign_decisions(week_start)` para cada semana cerrada del rango.
+- Loguea resumen (weeksFound, weeksFrozen, rowsInsertedFrozen, decisionsUpserted) y errores por semana sin tumbar todo el batch.
+
+##### Cron local (ejemplo)
+
+Cada lunes 08:00 UTC:
+
+```cron
+0 8 * * 1 cd /path/to/Koltin-dashboard-growth && pnpm install --frozen-lockfile && pnpm run ops:weekly_close
+```
+
+##### GitHub Actions (ejemplo)
+
+Puedes correrlo semanalmente (Lunes) usando secrets `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` (ver workflow sugerido abajo).
+
+### Queries de validación (ops)
+
+1) **Semanas congeladas**:
+
+```sql
+select week_start, count(*) as rows
+from public.weekly_quality_by_campaign_frozen
+group by 1
+order by 1 desc
+limit 30;
+```
+
+2) **Decisiones por semana**:
+
+```sql
+select week_start, decision, count(*) as rows
+from public.weekly_campaign_decisions
+group by 1,2
+order by week_start desc, rows desc;
+```
+
 ### Migraciones (Supabase)
 
 Aplicar migrations al proyecto Supabase:

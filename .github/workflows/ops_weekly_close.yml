@@ -1,0 +1,50 @@
+name: ops-weekly-close
+
+on:
+  schedule:
+    # Every Monday 08:00 UTC
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "YYYY-MM-DD Monday UTC (optional)"
+        required: false
+      until:
+        description: "YYYY-MM-DD end-exclusive (optional)"
+        required: false
+      dry_run:
+        description: "true|false"
+        required: false
+        default: "false"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Run ops:weekly_close
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.since }}" ]; then ARGS="$ARGS --since=${{ inputs.since }}"; fi
+          if [ -n "${{ inputs.until }}" ]; then ARGS="$ARGS --until=${{ inputs.until }}"; fi
+          if [ -n "${{ inputs.dry_run }}" ]; then ARGS="$ARGS --dry_run=${{ inputs.dry_run }}"; fi
+          echo "Running: pnpm run ops:weekly_close -- $ARGS"
+          pnpm run ops:weekly_close -- $ARGS
+
