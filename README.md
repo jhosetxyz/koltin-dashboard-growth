@@ -47,7 +47,7 @@ pnpm run sync:hubspot
 - **Backfill HubSpot por ventanas**
 
 ```bash
-pnpm run backfill:hubspot -- --since=2026-01-01 --until=2026-02-01 --windowDays=3 --mode=lastmodifieddate
+pnpm run backfill:hubspot -- --since=2026-01-05 --until=2026-03-30 --window_days=7 --mode=lastmodifieddate
 ```
 
 - **Sync Meta spend diario**
@@ -118,6 +118,25 @@ Qué hace (en orden):
 - Inserta en `public.weekly_quality_by_campaign_frozen` **solo si la semana no existe aún** (week-level insert-once).
 - Ejecuta `public.compute_weekly_campaign_decisions(week_start)` para cada semana cerrada del rango.
 - Loguea resumen (weeksFound, weeksFrozen, rowsInsertedFrozen, decisionsUpserted) y errores por semana sin tumbar todo el batch.
+
+#### Backfill controlado HubSpot (WOW consistente)
+
+Para dejar consistente `old_created_at` y el WOW de las últimas 12–16 semanas, corre backfill por ventanas para evitar deep paging:
+
+```bash
+# Ejemplo: últimas 12 semanas desde un lunes UTC
+pnpm run backfill:hubspot -- --since=2026-01-05 --until=2026-03-30 --window_days=7 --mode=lastmodifieddate
+
+# Luego: cerrar semanas completas (insert-once) + decisiones
+pnpm run ops:weekly_close -- --since=2026-01-05 --until=2026-03-30
+```
+
+El backfill imprime por ventana:
+- `window_since`, `window_until`
+- `fetched`, `upserted`
+- `db_max_created_at`, `db_max_old_created_at` (y `db_old_created_at_nulls`)
+
+Si una ventana falla, se loguea `correlationId` (si existe) y se continúa; al final se imprime `failed_windows`.
 
 ##### Cron local (ejemplo)
 

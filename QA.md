@@ -256,3 +256,77 @@ order by spend desc nulls last, leads desc;
 - `leads > 0` y `spend = 0`: puede ser normal si no hay spend trackeado, pero conviene auditar.
 - `delta_quality_index` muy alto con `leads` bajos: ruido estadístico o cambio fuerte de status.
 
+---
+
+## QA pack: HubSpot backfill (old_created_at) para WOW consistente
+
+Estas queries validan que el backfill pobló `public.hubspot_contacts.old_created_at` y que el conteo semanal (WOW) usando `COALESCE(old_created_at, created_at)` es consistente.
+
+### H1) Conteo de leads por semana (usando COALESCE)
+
+```sql
+select
+  date_trunc('week', (coalesce(old_created_at, created_at) at time zone 'utc'))::date as week_start,
+  count(*) as leads
+from public.hubspot_contacts
+where coalesce(old_created_at, created_at) >= (current_date - interval '140 days')::date::timestamptz
+group by 1
+order by 1 desc;
+```
+
+**Qué esperar**: una serie “suave” semana a semana; si hay una semana con 0 o muy baja vs el patrón, probablemente hay hueco de backfill.
+
+### H2) Max timestamps + null-rate de old_created_at
+
+```sql
+select
+  max(created_at) as max_created_at,
+  max(old_created_at) as max_old_created_at,
+  count(*) filter (where old_created_at is null) as old_created_at_nulls,
+  count(*) as total_rows,
+  case when count(*) > 0
+    then (count(*) filter (where old_created_at is null))::numeric / count(*)::numeric
+    else null
+  end as old_created_at_null_rate
+from public.hubspot_contacts;
+```
+
+**Qué esperar**:
+- `max_old_created_at` cercano a “hoy” (si la propiedad existe y el backfill cubrió el rango).
+- `old_created_at_null_rate` debería bajar con el backfill (si la propiedad está disponible en HubSpot).
+
+### H3) Semanas con caída abrupta (posible hueco de backfill)
+
+```sql
+with weekly as (
+  select
+    date_trunc('week', (coalesce(old_created_at, created_at) at time zone 'utc'))::date as week_start,
+    count(*)::bigint as leads
+  from public.hubspot_contacts
+  where coalesce(old_created_at, created_at) >= (current_date - interval '140 days')::date::timestamptz
+  group by 1
+),
+wow as (
+  select
+    w.*,
+    lag(w.leads) over (order by w.week_start) as prev_leads,
+    case
+      when lag(w.leads) over (order by w.week_start) > 0
+        then (w.leads - lag(w.leads) over (order by w.week_start))::numeric /
+             (lag(w.leads) over (order by w.week_start))::numeric
+      else null
+    end as delta_leads_pct
+  from weekly w
+)
+select *
+from wow
+where prev_leads is not null
+  and (
+    leads = 0
+    or (delta_leads_pct is not null and delta_leads_pct <= -0.50)
+  )
+order by week_start desc;
+```
+
+**Qué esperar**: idealmente pocas o ninguna semana marcada. Si aparece una caída grande, ajusta el backfill (reduce `window_days` y re-ejecuta esa ventana).
+
