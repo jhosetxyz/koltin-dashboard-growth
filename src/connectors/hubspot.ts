@@ -4,11 +4,18 @@ type HubSpotRequestInit = {
   body?: unknown;
 };
 
+type HubSpotHttpError = Error & {
+  status?: number;
+  statusText?: string;
+  path?: string;
+  correlationId?: string | null;
+};
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const DEFAULT_CONTACT_PROPERTIES = [
+const BASE_CONTACT_PROPERTIES = [
   "hs_object_id",
   "email",
   "phone",
@@ -30,6 +37,47 @@ function requiredEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing env var: ${name}`);
   return value;
+}
+
+function getOldCreatedAtPropertyName(): string | null {
+  const raw = process.env.HUBSPOT_OLD_CREATED_AT_PROPERTY ?? "old_created_at";
+  const name = raw.trim();
+  return name.length > 0 ? name : null;
+}
+
+let cachedContactProperties: string[] | null = null;
+export async function resolveContactProperties(): Promise<string[]> {
+  if (cachedContactProperties) return cachedContactProperties;
+
+  const props = [...BASE_CONTACT_PROPERTIES];
+  const oldProp = getOldCreatedAtPropertyName();
+  if (!oldProp) {
+    cachedContactProperties = props;
+    return props;
+  }
+
+  try {
+    await hubspotRequest(`/crm/v3/properties/contacts/${encodeURIComponent(oldProp)}`);
+    props.push(oldProp);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      JSON.stringify(
+        {
+          connector: "hubspot",
+          fn: "resolveContactProperties",
+          warning: "old_created_at property not available; omitting from properties list",
+          property: oldProp,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  cachedContactProperties = props;
+  return props;
 }
 
 function toQueryString(query: HubSpotRequestInit["query"]): string {
@@ -82,6 +130,19 @@ export async function hubspotRequest<T>(
           `HubSpot error response body for ${path}:`,
           typeof body === "string" ? body : JSON.stringify(body, null, 2),
         );
+        // eslint-disable-next-line no-console
+        console.error(
+          `HubSpot error request for ${path}:`,
+          JSON.stringify(
+            {
+              method: reqInitBase.method,
+              url,
+              body: init.body ?? null,
+            },
+            null,
+            2,
+          ),
+        );
 
         const retryAfterHeader = res.headers.get("retry-after");
         const retryAfterMs = retryAfterHeader
@@ -102,14 +163,36 @@ export async function hubspotRequest<T>(
           continue;
         }
 
-        throw new Error(
+        const err: HubSpotHttpError = new Error(
           `HubSpot request failed (${res.status} ${res.statusText}) ${path}`,
         );
+        err.status = res.status;
+        err.statusText = res.statusText;
+        err.path = path;
+        try {
+          err.correlationId =
+            body && typeof body === "object" && "correlationId" in body
+              ? String((body as any).correlationId ?? "")
+              : null;
+        } catch {
+          err.correlationId = null;
+        }
+        throw err;
       }
 
       return (await res.json()) as T;
     } catch (err) {
       clearTimeout(timeout);
+
+      // Don't retry HTTP errors we already classified as non-retryable (e.g. 400).
+      if (
+        err &&
+        typeof err === "object" &&
+        "message" in err &&
+        String((err as Error).message).startsWith("HubSpot request failed (")
+      ) {
+        throw err;
+      }
 
       if (attempt >= maxRetries) throw err;
 
@@ -135,6 +218,7 @@ export type HubSpotContact = {
 };
 
 export async function listContacts(params?: { after?: string }) {
+  const properties = await resolveContactProperties();
   const data = await hubspotRequest<{
     results: HubSpotContact[];
     paging?: { next?: { after: string } };
@@ -142,7 +226,7 @@ export async function listContacts(params?: { after?: string }) {
     query: {
       limit: 100,
       archived: false,
-      properties: DEFAULT_CONTACT_PROPERTIES.join(","),
+      properties: properties.join(","),
       ...(params?.after ? { after: params.after } : {}),
     },
   });
@@ -155,6 +239,8 @@ export async function listContacts(params?: { after?: string }) {
 
 export type HubSpotSearchMode = "createdate" | "lastmodifieddate";
 
+const HUBSPOT_SEARCH_AFTER_LIMIT = 10_000;
+
 export async function searchContacts(params: {
   mode: HubSpotSearchMode;
   sinceMs: number;
@@ -162,6 +248,17 @@ export async function searchContacts(params: {
   after?: string;
 }) {
   const filterProp = params.mode === "createdate" ? "createdate" : "lastmodifieddate";
+  const properties = await resolveContactProperties();
+
+  // HubSpot search has a deep paging cap; after >= 10000 typically fails with 400.
+  if (params.after) {
+    const n = Number(params.after);
+    if (Number.isFinite(n) && n >= HUBSPOT_SEARCH_AFTER_LIMIT) {
+      throw new Error(
+        `HubSpot search deep paging limit reached (after=${params.after}). Usa ventanas más chicas con --until (end-exclusive) o el backfill runner.`,
+      );
+    }
+  }
 
   const filters: Array<{
     propertyName: string;
@@ -191,7 +288,7 @@ export async function searchContacts(params: {
     body: {
       filterGroups: [{ filters }],
       sorts: [filterProp],
-      properties: DEFAULT_CONTACT_PROPERTIES,
+      properties,
       limit: 100,
       archived: false,
       ...(params.after ? { after: params.after } : {}),

@@ -55,6 +55,12 @@ function toIsoFromHubspotValue(
   throw new Error("Missing timestamp");
 }
 
+function getOldCreatedAtPropertyName(): string {
+  const raw = process.env.HUBSPOT_OLD_CREATED_AT_PROPERTY ?? "old_created_at";
+  const name = raw.trim();
+  return name.length > 0 ? name : "old_created_at";
+}
+
 function parseBool(v: string | null | undefined): boolean | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim().toLowerCase();
@@ -88,6 +94,7 @@ export async function runSyncHubspotContacts(
   params: RunSyncHubspotContactsParams,
 ): Promise<RunSyncHubspotContactsResult> {
   const supabase = getSupabaseClient();
+  const oldCreatedProp = getOldCreatedAtPropertyName();
 
   let after: string | undefined = params.after;
   let fetched = 0;
@@ -165,6 +172,7 @@ export async function runSyncHubspotContacts(
       const rows = page.results.map((c: HubSpotContact) => {
         let created_at: string;
         let updated_at: string;
+        let old_created_at: string | null = null;
 
         try {
           created_at = toIsoFromHubspotValue(c.properties.createdate, c.createdAt);
@@ -172,6 +180,15 @@ export async function runSyncHubspotContacts(
           // eslint-disable-next-line no-console
           console.warn(`Missing createdate for contact ${c.id}; using now()`);
           created_at = toIsoFromHubspotValue(null, null, { fallbackNow: true });
+        }
+
+        try {
+          old_created_at = toIsoFromHubspotValue(
+            (c.properties as Record<string, string | null | undefined>)[oldCreatedProp],
+            null,
+          );
+        } catch {
+          old_created_at = null;
         }
 
         try {
@@ -193,6 +210,7 @@ export async function runSyncHubspotContacts(
         return {
           hubspot_contact_id: c.id,
           created_at,
+          old_created_at,
           updated_at,
           email: c.properties.email ?? null,
           phone: c.properties.phone ?? null,

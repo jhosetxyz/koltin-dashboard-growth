@@ -86,6 +86,18 @@ pnpm run seed:google_campaign_mapping -- --customer_id=6978671646 --login_custom
 pnpm run aggregate:weekly
 ```
 
+#### WOW (congelado) vs MOM (vivo)
+
+El job genera dos salidas:
+
+- **Tabla viva**: `public.weekly_quality_by_campaign`
+  - Se **recalcula** y se **upsertea** en cada corrida (útil para MOM y para que el mes en curso siga cambiando).
+- **Tabla congelada (WOW)**: `public.weekly_quality_by_campaign_frozen`
+  - Inserta **solo semanas cerradas** (semana cerrada = `week_start < week_start_de_la_semana_actual` en UTC).
+  - Semántica **insert-once**: si ya existe la fila para `(week_start, platform, canonical_campaign, canonical_subgroup)`, se ignora (no se actualiza), así el WOW no cambia.
+
+Tip: para el dashboard puedes leer de `public.weekly_quality_by_campaign_effective`, que combina semanas cerradas (frozen) + la semana abierta (live).
+
 ### Migraciones (Supabase)
 
 Aplicar migrations al proyecto Supabase:

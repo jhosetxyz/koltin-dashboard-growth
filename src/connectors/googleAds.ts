@@ -24,6 +24,10 @@ type GoogleAdsIds = {
   loginCustomerId?: string; // MCC (optional)
 };
 
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
 function resolveGoogleAdsIds(overrides?: Partial<GoogleAdsIds>): GoogleAdsIds {
   const customerId =
     overrides?.customerId ?? requiredEnv("GOOGLE_ADS_CUSTOMER_ID");
@@ -32,7 +36,9 @@ function resolveGoogleAdsIds(overrides?: Partial<GoogleAdsIds>): GoogleAdsIds {
     process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ??
     undefined;
 
-  return { customerId, loginCustomerId };
+  const out: GoogleAdsIds = { customerId };
+  if (isNonEmptyString(loginCustomerId)) out.loginCustomerId = loginCustomerId;
+  return out;
 }
 
 function googleCustomer(overrides?: Partial<GoogleAdsIds>) {
@@ -72,7 +78,7 @@ export function isManagerAccountError(err: unknown): boolean {
 function parseCustomerResourceName(rn: string): string | null {
   // "customers/1234567890"
   const m = /^customers\/(\d+)$/.exec(rn);
-  return m ? m[1] : null;
+  return m?.[1] ?? null;
 }
 
 export async function listAccessibleCustomers(params?: {
@@ -230,10 +236,10 @@ async function fetchGoogleCampaignInsightsDailySingle(params: {
   customerId: string;
   loginCustomerId?: string;
 }): Promise<GoogleCampaignInsightDaily[]> {
-  const { customer, customerId, loginCustomerId } = googleCustomer({
-    customerId: params.customerId,
-    loginCustomerId: params.loginCustomerId,
-  });
+  const overrides: Partial<GoogleAdsIds> = { customerId: params.customerId };
+  if (isNonEmptyString(params.loginCustomerId))
+    overrides.loginCustomerId = params.loginCustomerId;
+  const { customer, customerId, loginCustomerId } = googleCustomer(overrides);
 
   // eslint-disable-next-line no-console
   console.log(
@@ -303,10 +309,12 @@ export async function fetchGoogleCampaignInsightsDaily(params: {
   mode?: "direct" | "mcc";
 }): Promise<GoogleCampaignInsightDaily[]> {
   try {
-    const ids = resolveGoogleAdsIds({
-      customerId: params.customerId,
-      loginCustomerId: params.loginCustomerId,
-    });
+    const overrides: Partial<GoogleAdsIds> = {};
+    if (isNonEmptyString(params.customerId)) overrides.customerId = params.customerId;
+    if (isNonEmptyString(params.loginCustomerId))
+      overrides.loginCustomerId = params.loginCustomerId;
+
+    const ids = resolveGoogleAdsIds(overrides);
 
     const forcedMcc =
       params.mode === "mcc" ||
@@ -374,10 +382,11 @@ export async function fetchGoogleCampaignInsightsDaily(params: {
     return all;
   } catch (err) {
     if (params.mode !== "mcc" && isManagerAccountError(err)) {
-      const ids = resolveGoogleAdsIds({
-        customerId: params.customerId,
-        loginCustomerId: params.loginCustomerId,
-      });
+      const overrides: Partial<GoogleAdsIds> = {};
+      if (isNonEmptyString(params.customerId)) overrides.customerId = params.customerId;
+      if (isNonEmptyString(params.loginCustomerId))
+        overrides.loginCustomerId = params.loginCustomerId;
+      const ids = resolveGoogleAdsIds(overrides);
       const managerId = ids.loginCustomerId ?? ids.customerId;
       // eslint-disable-next-line no-console
       console.warn(
@@ -446,10 +455,11 @@ export async function fetchGoogleCampaignList(params: {
     WHERE campaign.status IN ('ENABLED', 'PAUSED')
   `.trim();
 
-  const ids = resolveGoogleAdsIds({
-    customerId: params.customerId,
-    loginCustomerId: params.loginCustomerId,
-  });
+  const overrides: Partial<GoogleAdsIds> = {};
+  if (isNonEmptyString(params.customerId)) overrides.customerId = params.customerId;
+  if (isNonEmptyString(params.loginCustomerId))
+    overrides.loginCustomerId = params.loginCustomerId;
+  const ids = resolveGoogleAdsIds(overrides);
 
   const forcedMcc =
     params.mode === "mcc" ||
@@ -457,10 +467,10 @@ export async function fetchGoogleCampaignList(params: {
 
   try {
     if (!forcedMcc) {
-      const { customer, customerId, loginCustomerId } = googleCustomer({
-        customerId: ids.customerId,
-        loginCustomerId: ids.loginCustomerId,
-      });
+      const overrides: Partial<GoogleAdsIds> = { customerId: ids.customerId };
+      if (isNonEmptyString(ids.loginCustomerId))
+        overrides.loginCustomerId = ids.loginCustomerId;
+      const { customer, customerId, loginCustomerId } = googleCustomer(overrides);
 
       // eslint-disable-next-line no-console
       console.log(

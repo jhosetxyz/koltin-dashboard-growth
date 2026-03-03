@@ -41,6 +41,27 @@ type WeeklyRow = {
   generated_at: string | null;
 };
 
+type FrozenWeeklyRow = WeeklyRow & {
+  frozen_at: string;
+};
+
+function normalizeForFrozen(r: WeeklyRow): FrozenWeeklyRow {
+  const platform = r.platform ?? "meta";
+  const canonical_campaign =
+    r.canonical_campaign ?? r.utm_campaign ?? "unmapped";
+  const canonical_subgroup = r.canonical_subgroup ?? "";
+  const utm_campaign = r.utm_campaign ?? canonical_campaign;
+
+  return {
+    ...r,
+    platform,
+    canonical_campaign,
+    canonical_subgroup,
+    utm_campaign,
+    frozen_at: new Date().toISOString(),
+  };
+}
+
 type UnmappedWeeklyRow = {
   week_start: string;
   raw_utm: string;
@@ -76,6 +97,7 @@ async function aggregateWeeklyQualityByCampaign() {
 
   const rows = (data ?? []) as WeeklyRow[];
   const uniqueWeeks = Array.from(new Set(rows.map((r) => r.week_start))).sort();
+  const currentWeekStart = formatDateUtc(getUtcWeekStartMonday(todayUtc));
 
   const { data: unmappedCountData, error: unmappedCountError } =
     await supabase.rpc("count_unmapped_utms", {
@@ -131,6 +153,24 @@ async function aggregateWeeklyQualityByCampaign() {
     upserted = upsertData?.length ?? 0;
   }
 
+  // Freeze CLOSED weeks only (insert-once semantics).
+  const frozenRows = rows
+    .filter((r) => r.week_start < currentWeekStart)
+    .map((r) => normalizeForFrozen(r));
+
+  let frozenInserted = 0;
+  if (frozenRows.length > 0) {
+    const { data: frozenData, error: frozenError } = await supabase
+      .from("weekly_quality_by_campaign_frozen")
+      .upsert(frozenRows, {
+        onConflict: "week_start,platform,canonical_campaign,canonical_subgroup",
+        ignoreDuplicates: true,
+      })
+      .select("week_start,platform,canonical_campaign,canonical_subgroup");
+    if (frozenError) throw frozenError;
+    frozenInserted = frozenData?.length ?? 0;
+  }
+
   // eslint-disable-next-line no-console
   console.log(
     JSON.stringify(
@@ -141,6 +181,9 @@ async function aggregateWeeklyQualityByCampaign() {
         weeksProcessed: uniqueWeeks.length,
         rowsComputed: rows.length,
         rowsUpserted: upserted,
+        currentWeekStart,
+        frozenRowsAttempted: frozenRows.length,
+        frozenRowsInserted: frozenInserted,
         unmappedDistinct,
         topUnmapped: topUnmappedData ?? [],
         unmappedWeeklyRowsComputed: unmappedWeeklyRows.length,
